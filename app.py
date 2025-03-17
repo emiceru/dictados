@@ -1,110 +1,84 @@
 import streamlit as st
 import sqlite3
-from gtts import gTTS
+from auth import registrar_usuario, verificar_usuario
+from gamificacion import mostrar_panel
 from datetime import datetime
-import os
-import pytesseract
-from PIL import Image
-import openai
-from dotenv import load_dotenv
 
-# Configuración inicial
-st.set_page_config(page_title="Dictados Ortográficos", layout="centered")
+st.set_page_config(page_title="Dictados Gamificados")
 
-# Cargar API Key\load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
+# Función login
+def login_ui():
+    st.sidebar.header("🔐 Autenticación")
+    accion = st.sidebar.selectbox("Acción", ["Iniciar sesión", "Registrar usuario"])
+    user = st.sidebar.text_input("Usuario")
+    password = st.sidebar.text_input("Contraseña", type="password")
 
-# Crear carpetas necesarias
-os.makedirs("dictados", exist_ok=True)
-os.makedirs("correcciones", exist_ok=True)
+    if accion == "Registro":
+        if st.sidebar.button("Registrar"):
+            if registrar_usuario(user, password):
+                st.sidebar.success("Registro exitoso.")
+            else:
+                st.sidebar.error("El usuario ya existe.")
+        return None
 
-# Base de datos
-conn = sqlite3.connect('dictados.db')
-c = conn.cursor()
+    elif accion == "Login":
+        if st.sidebar.button("Entrar"):
+            if verificar_usuario(user, password):
+                st.sidebar.success(f"¡Bienvenido/a, {user}!")
+                return user
+            else:
+                st.sidebar.error("Credenciales incorrectas.")
+        return None
 
-# Crear tablas
-c.execute('''CREATE TABLE IF NOT EXISTS reglas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                titulo TEXT,
-                descripcion TEXT)''')
+usuario_actual = login_ui()
 
-c.execute('''CREATE TABLE IF NOT EXISTS dictados (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                regla_id INTEGER,
-                texto TEXT,
-                fecha TEXT,
-                FOREIGN KEY(regla_id) REFERENCES reglas(id))''')
+if usuario_actual := usuario_actual:
+    menu = st.sidebar.selectbox("Menú", ["Inicio", "Añadir regla", "Añadir dictado", "Corregir dictado", "Mi progreso"])
 
-conn.commit()
+    conn = sqlite3.connect('dictados.db')
+    c = conn.cursor()
 
-st.title("📚 Dictados Ortográficos")
+    if menu == "Inicio":
+        st.header("Dictados disponibles")
+        dictados = c.execute("SELECT texto FROM dictados ORDER BY fecha DESC LIMIT 10").fetchall()
+        for dictado in dictados:
+            st.write(dictado[0])
 
-# Navegación
-opcion = st.sidebar.selectbox("Selecciona una opción", ["Inicio", "Añadir regla", "Añadir dictado", "Corregir dictado"])
+    elif menu == "Añadir regla":
+        st.header("Añadir regla")
+        titulo = st.text_input("Título")
+        desc = st.text_area("Descripción")
+        if st.button("Añadir regla"):
+            c.execute("INSERT INTO reglas (titulo, descripcion) VALUES (?, ?)", (titulo, desc))
+            conn.commit()
+            st.success("Regla añadida.")
 
-if opcion == "Inicio":
-    st.header("📖 Dictados disponibles")
-    dictados = c.execute("SELECT d.id, r.titulo, d.texto, d.fecha FROM dictados d JOIN reglas r ON d.regla_id = r.id").fetchall()
-    for dictado in dictados:
-        st.subheader(f"{dictado[1]} ({dictado[3]})")
-        st.write(dictado[2])
+    elif menu == "Añadir dictado":
+        st.header("Añadir dictado")
+        reglas = c.execute("SELECT * FROM reglas").fetchall()
+        regla = st.selectbox("Regla", [f"{r[0]}-{r[1]}" for r in reglas])
+        texto = st.text_area("Texto dictado")
+        if st.button("Añadir dictado"):
+            regla_id = int(regla.split(" - ")[0])
+            c.execute("INSERT INTO dictados (regla_id, texto, fecha) VALUES (?, ?, ?)", (regla_id, texto, datetime.now().strftime('%Y-%m-%d')))
+            conn.commit()
+            st.success("Dictado añadido.")
 
-elif opcion == "Añadir regla":
-    st.header("🖊️ Nueva Regla Ortográfica")
-    titulo_regla = st.text_input("Título")
-    descripcion_regla = st.text_area("Descripción")
-    if st.button("Añadir"):
-        c.execute("INSERT INTO reglas (titulo, descripcion) VALUES (?, ?)", (titulo_regla, descripcion_regla))
-        conn.commit()
-        st.success("Regla añadida correctamente")
+    elif menu == "Corregir dictado":
+        st.header("Sube tu dictado para corregir")
+        dictado_id = st.selectbox("Selecciona dictado", [f"{d[0]}" for d in c.execute("SELECT id FROM dictados")])
+        errores = st.number_input("Número de errores", min_value=0)
+        aciertos = st.number_input("Número de aciertos", min_value=0)
+        if st.button("Guardar resultado"):
+            usuario_id = c.execute("SELECT id FROM usuarios WHERE username=?", (user,)).fetchone()[0]
+            c.execute("INSERT INTO resultados (usuario_id, dictado_id, fecha, errores, aciertos) VALUES (?, ?, ?, ?, ?)",
+                      (usuario_id, dictado_id, datetime.now().strftime('%Y-%m-%d'), errores, aciertos))
+            conn.commit()
+            st.success("Resultados guardados.")
 
-elif opcion == "Añadir dictado":
-    st.header("📝 Nuevo Dictado")
-    reglas = c.execute("SELECT * FROM reglas").fetchall()
-    regla_id_seleccionada = st.selectbox("Selecciona la regla", [f"{r[0]} - {r[1]}" for r in reglas])
-    texto_dictado = st.text_area("Texto del dictado")
+    elif menu == "Mi progreso":
+        mostrar_panel(usuario=user)
 
-    if st.button("Añadir dictado"):
-        regla_id = int(regla_id_seleccionada.split(" - ")[0])
-        fecha_actual = datetime.now().strftime('%Y-%m-%d')
-        c.execute("INSERT INTO dictados (regla_id, texto, fecha) VALUES (?, ?, ?)", (regla_id, texto_dictado, fecha_actual))
-        conn.commit()
-
-        tts = gTTS(texto_dictado, lang='es')
-        audio_file = f"dictados/dictado_{fecha_actual}.mp3"
-        tts.save(audio_file)
-        st.audio(audio_file)
-        st.success("Dictado añadido y audio generado")
-
-elif opcion == "Corregir dictado":
-    st.header("🖼️ Corrección de Dictado por Foto")
-    dictados = c.execute("SELECT id, texto FROM dictados").fetchall()
-    dictado_id = st.selectbox("Selecciona el dictado", [f"{d[0]}" for d in dictados])
-    foto = st.file_uploader("Subir foto", type=["jpg", "jpeg", "png"])
-
-    if foto and dictado_id:
-        imagen = Image.open(foto)
-        texto_alumno = pytesseract.image_to_string(imagen, lang='spa')
-        dictado_texto = c.execute("SELECT texto FROM dictados WHERE id=?", (dictado_id,)).fetchone()[0]
-
-        prompt_correccion = f"""
-        Corrige este dictado:
-        Original: {dictado_texto}
-        Alumno: {texto_extraido}
-        Enumera y explica errores.
-        """
-
-        correccion = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt_correccion}]
-        )['choices'][0]['message']['content']
-
-        st.write("### 📌 Corrección")
-        st.write(correccion)
-
-        reporte = f"correccion_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
-        with open(reporte, 'w', encoding='utf-8') as f:
-            f.write(correccion)
-
-        with open(reporte, 'rb') as f:
-            st.download_button("Descargar corrección", f, file_name=reporte)
+    conn.close()
+else:
+    st.info("Por favor, inicia sesión.")

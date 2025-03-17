@@ -1,6 +1,9 @@
 streamlit
+sqlite3
 gtts
 pytesseract
 Pillow
 openai
 python-dotenv
+bcrypt
+pandas
