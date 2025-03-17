@@ -1,6 +1,5 @@
 streamlit
-sqlite3
-gtts
+pyttsx3
 pytesseract
 Pillow
 openai
