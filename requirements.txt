@@ -1,0 +1,6 @@
+streamlit
+gtts
+pytesseract
+Pillow
+openai
+python-dotenv
